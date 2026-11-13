@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQL 数据空间分析台</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">▦</span>
+    <div>
+      <h1>SQL 数据空间分析台</h1>
+      <p class="subtitle">CSV 建表 · 关联查询 · 分页下载 · 空间隔离 · 只读安全沙箱</p>
+    </div>
+  </div>
+  <div class="limits" id="limits-badge" title="服务端强制限额">加载限额中…</div>
+</header>
+
+<main class="layout">
+  <!-- 左栏：空间 + 表结构 -->
+  <aside class="sidebar">
+    <section class="card">
+      <div class="card-head">
+        <h2>数据空间</h2>
+        <button class="btn btn-small" id="btn-new-space">＋ 新建</button>
+      </div>
+      <ul class="space-list" id="space-list"></ul>
+    </section>
+
+    <section class="card" id="schema-card" hidden>
+      <div class="card-head">
+        <h2>表结构</h2>
+        <button class="btn btn-small" id="btn-sample">载入样本</button>
+      </div>
+      <div id="schema-tree"></div>
+    </section>
+  </aside>
+
+  <!-- 主栏 -->
+  <section class="main-col">
+    <section class="card" id="work-card" hidden>
+      <div class="tabs">
+        <button class="tab active" data-tab="query">SQL 查询</button>
+        <button class="tab" data-tab="import">导入 CSV</button>
+        <button class="tab" data-tab="history">执行历史</button>
+      </div>
+
+      <!-- 查询面板 -->
+      <div class="tab-panel" id="tab-query">
+        <div class="sample-pick">
+          <strong>示例查询：</strong>
+          <select id="sample-select">
+            <option value="">— 选择一条载入编辑器 —</option>
+            <optgroup label="复杂关联查询（可运行）" id="opt-join"></optgroup>
+            <optgroup label="越权尝试（应被拦截）" id="opt-attack"></optgroup>
+            <optgroup label="长递归（超时/取消验证）" id="opt-stress"></optgroup>
+          </select>
+        </div>
+        <textarea id="sql-editor" spellcheck="false"
+          placeholder="-- 只允许 SELECT / WITH 查询；写操作、ATTACH、PRAGMA、危险函数均在 prepare 阶段被拦截"></textarea>
+        <div class="editor-actions">
+          <button class="btn btn-primary" id="btn-run">▶ 执行（Ctrl+Enter）</button>
+          <button class="btn btn-warn" id="btn-cancel" disabled>■ 取消</button>
+          <span class="hint" id="query-hint"></span>
+        </div>
+        <div id="query-error" class="error-box" hidden></div>
+        <div id="result-meta" class="result-meta" hidden></div>
+        <div class="table-wrap" id="result-wrap" hidden>
+          <table id="result-table"></table>
+        </div>
+        <div class="pager" id="pager" hidden>
+          <button class="btn btn-small" id="btn-prev">← 上一页</button>
+          <span id="page-info"></span>
+          <label class="page-size">每页
+            <select id="page-size"></select> 行
+          </label>
+          <button class="btn btn-small" id="btn-next">下一页 →</button>
+          <button class="btn btn-small" id="btn-download">⤓ 下载 CSV</button>
+        </div>
+      </div>
+
+      <!-- 导入面板 -->
+      <div class="tab-panel" id="tab-import" hidden>
+        <div class="import-box">
+          <label class="field">
+            表名（字母/下划线开头，仅含字母数字下划线）
+            <input type="text" id="import-table" placeholder="例如 sales_2026">
+          </label>
+          <label class="field">
+            选择 UTF-8 编码的 CSV 文件（首行表头）
+            <input type="file" id="import-file" accept=".csv,text/csv">
+          </label>
+          <div class="editor-actions">
+            <button class="btn btn-primary" id="btn-import">上传并建表</button>
+            <span class="hint" id="import-hint"></span>
+          </div>
+          <div id="import-error" class="error-box" hidden></div>
+          <div id="import-ok" class="ok-box" hidden></div>
+        </div>
+        <div class="rules">
+          <h3>导入规则</h3>
+          <ul>
+            <li>先全量校验列名（空名、保留字、重名/大小写冲突）与字段类型（INTEGER / REAL / TEXT 自动推断），再在事务内建表；</li>
+            <li>建表或插入任一步失败都会整体回滚，不会留下半张表；</li>
+            <li>插入全部使用参数化语句，CSV 内容无法注入 SQL；</li>
+            <li>单文件 ≤ 10 MB、≤ 200,000 行、≤ 200 列。</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 历史面板 -->
+      <div class="tab-panel" id="tab-history" hidden>
+        <div class="card-head">
+          <h2>执行历史与停止原因</h2>
+          <button class="btn btn-small" id="btn-refresh-history">刷新</button>
+        </div>
+        <div class="table-wrap">
+          <table class="history-table">
+            <thead>
+              <tr><th>时间</th><th>SQL（摘要）</th><th>状态</th><th>停止原因</th><th>行数</th><th>耗时</th><th>错误定位</th></tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card empty-state" id="empty-state">
+      <h2>👋 从左侧新建或选择一个数据空间开始</h2>
+      <p>每个空间拥有独立的数据库文件，彼此完全隔离；查询通道只读，无法写表、附加数据库、加载扩展或读取宿主机文件。</p>
+    </section>
+  </section>
+</main>
+
+<dialog id="dlg-space">
+  <form method="dialog" class="dlg-form">
+    <h3>新建数据空间</h3>
+    <label>空间名称
+      <input type="text" id="new-space-name" maxlength="64" placeholder="例如：双十一分析">
+    </label>
+    <menu>
+      <button value="cancel" class="btn">取消</button>
+      <button value="ok" class="btn btn-primary" id="dlg-ok">创建</button>
+    </menu>
+  </form>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>
